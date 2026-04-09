@@ -80,6 +80,7 @@ SESSION_DEFAULTS = {
     "mean_rfi": None,
     "assessment_mode": "Draft new",
     "existing_task": "",
+    "existing_summary": "",
     "finalised_task": "",
     "last_assessment_prompt": "",
     "last_summary_prompt": "",

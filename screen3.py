@@ -1,6 +1,129 @@
 import streamlit as st
 from utils import standards_map, get_prior_chain, generate_pdf
 
+
+def build_context(selected_codes):
+    """Build shared context block for all prompts."""
+    hinge_nodes, y_goals, sc_lines, prior_lines = [], [], [], []
+    for code in selected_codes:
+        if code not in standards_map:
+            continue
+        std = standards_map[code]
+        y_goals.append(f"{code}: {std['y_goal']}")
+        for node in std["nodes"]:
+            if node["hinge"]:
+                hinge_nodes.append(f"- Node {node['id']} ({code}): {node['label']} — {node.get('hinge_reason', '')}")
+            sc = node.get("success_criteria", [])
+            if sc:
+                sc_lines.append(f"Node {node['id']} ({code}) — {node['label']}:")
+                for s in sc:
+                    sc_lines.append(f"  • {s}")
+        chain = get_prior_chain(code)
+        if chain:
+            prior_lines.append(f"{code} prior pathway:")
+            for item in chain:
+                prior_lines.append(f"  Year {item['year_level']} · {item['code']} · {item['title']}: {item['y_goal']}")
+
+    return {
+        "y_goal_text": "\n".join(y_goals),
+        "prior_text": "\n".join(prior_lines) if prior_lines else "No prior pathway found.",
+        "hinge_text": "\n".join(hinge_nodes) if hinge_nodes else "None identified",
+        "sc_text": "\n".join(sc_lines) if sc_lines else "None defined",
+    }
+
+
+def build_assessment_prompt(selected_codes, assessment_type, existing_task, existing_summary):
+    ctx = build_context(selected_codes)
+
+    # Adapt instructions based on what exists
+    task_section = ""
+    if existing_task.strip():
+        task_section = f"""EXISTING TASK
+──────────────────────────────────
+{existing_task}
+
+OUTPUT 1 — REVISED ASSESSMENT TASK
+Review and improve the existing task against the X–Y model:
+1. Does it certify Xmin for all students? (~60% of marks)
+2. Does it reward X+ without new content? (~30% of marks)
+3. Does it provide open-access X++? (~10% of marks)
+4. Are hinge concepts adequately assessed?
+5. Does any item exceed the Y-goals?
+Rewrite items that do not meet requirements."""
+    else:
+        task_section = """OUTPUT 1 — FULL ASSESSMENT TASK
+Draft a complete assessment task with three sections:
+
+Section A — Core Width (Xmin) (~60% of marks)
+Compulsory, accessible to all. Tests minimum construction at key nodes.
+
+Section B — Extended Width (X+) (~30% of marks)
+Same concepts, broader integration and coordination.
+
+Section C — Synthetic Width (X++) (~10% of marks)
+Open-access. Transfer, application or synthesis.
+
+- No section introduces content beyond the Y-goals
+- All students may attempt all sections
+- Do not label any section as "extension"
+- Assessment mean should naturally sit around 60%"""
+
+    summary_section = ""
+    if existing_summary.strip():
+        summary_section = f"""EXISTING SUMMARY
+──────────────────────────────────
+{existing_summary}
+
+OUTPUT 2 — REVISED SUMMARY
+Review and improve the existing summary. It should be 150 words max and include:
+- Assessment type and format
+- Key concepts per section (A/B/C)
+- Which hinge concepts are tested
+- Mark weighting per section"""
+    else:
+        summary_section = """OUTPUT 2 — ASSESSMENT SUMMARY (150 words max)
+A concise summary for lesson planning. Include:
+- Assessment type and format
+- Key concepts per section (A/B/C)
+- Which hinge concepts are directly tested
+- Mark weighting per section"""
+
+    return f"""You are helping a Head of Department design a Year 7 Science assessment aligned to the X–Y Constructivist Model.
+
+CONTEXT
+──────────────────────────────────
+Year Level: 7
+Subject: Science
+Assessment Type: {assessment_type}
+Standards: {', '.join(selected_codes)}
+
+Y-GOALS (do not exceed these)
+──────────────────────────────────
+{ctx['y_goal_text']}
+
+PRIOR KNOWLEDGE PATHWAY
+──────────────────────────────────
+{ctx['prior_text']}
+
+HINGE CONCEPTS (must be adequately assessed)
+──────────────────────────────────
+{ctx['hinge_text']}
+
+SUCCESS CRITERIA PER NODE (Section A must test these)
+──────────────────────────────────
+{ctx['sc_text']}
+
+ASSESSMENT MODEL
+──────────────────────────────────
+- Xmin = minimum construction (~60%)
+- X+ = extended width, same concepts (~30%)
+- X++ = synthetic width, open-access transfer (~10%)
+
+{task_section}
+
+{summary_section}"""
+
+
 def show():
     selected_codes = st.session_state.selected_codes
     assessment_type = st.session_state.assessment_type
@@ -12,214 +135,76 @@ def show():
     st.subheader("Assessment Setup")
     st.caption(f"Assessment type: **{assessment_type}** · Standards: {', '.join(selected_codes)}")
 
-    # ── Step 1: Generate assessment prompt ────────────────────────────────────
+    # ── Step 1: Optional existing inputs + generate ───────────────────────────
     st.subheader("Step 1 — Generate Assessment Prompt")
-    mode = st.radio(
-        "Assessment task",
-        ["Draft new", "Review existing"],
-        index=["Draft new", "Review existing"].index(st.session_state.assessment_mode),
-        horizontal=True
-    )
-    st.session_state.assessment_mode = mode
+    st.caption("Optionally paste existing task and/or summary — the prompt will review and improve them. Leave blank to draft from scratch.")
 
-    existing_task = ""
-    if mode == "Review existing":
+    col1, col2 = st.columns(2)
+    with col1:
         existing_task = st.text_area(
-            "Paste your existing assessment task here",
-            value=st.session_state.existing_task,
-            height=200,
-            placeholder="Paste the full assessment task text..."
+            "Existing task (optional)",
+            value=st.session_state.get("existing_task", ""),
+            height=140,
+            placeholder="Paste existing task to review, or leave blank to draft new..."
         )
-        st.session_state.existing_task = existing_task
+        st.session_state["existing_task"] = existing_task
+    with col2:
+        existing_summary = st.text_area(
+            "Existing summary (optional)",
+            value=st.session_state.get("existing_summary", ""),
+            height=140,
+            placeholder="Paste existing summary to review, or leave blank to generate new..."
+        )
+        st.session_state["existing_summary"] = existing_summary
 
     if st.button("Generate Assessment Prompt", type="primary", use_container_width=True):
-        hinge_nodes = []
-        y_goals = []
-        for code in selected_codes:
-            if code not in standards_map:
-                continue
-            std = standards_map[code]
-            y_goals.append(f"{code}: {std['y_goal']}")
-            for node in std["nodes"]:
-                if node["hinge"]:
-                    hinge_nodes.append(f"- Node {node['id']} ({code}): {node['label']} — {node.get('hinge_reason', '')}")
-
-        hinge_text = "\n".join(hinge_nodes) if hinge_nodes else "None identified"
-        y_goal_text = "\n".join(y_goals)
-
-        # Build prior knowledge chain
-        prior_lines = []
-        for code in selected_codes:
-            chain = get_prior_chain(code)
-            if chain:
-                prior_lines.append(f"{code} prior pathway:")
-                for item in chain:
-                    prior_lines.append(f"  Year {item['year_level']} · {item['code']} · {item['title']}: {item['y_goal']}")
-        prior_text = "\n".join(prior_lines) if prior_lines else "No prior pathway found."
-
-        sc_lines = []
-        for code in selected_codes:
-            if code not in standards_map:
-                continue
-            for node in standards_map[code]["nodes"]:
-                sc = node.get("success_criteria", [])
-                if sc:
-                    sc_lines.append(f"Node {node['id']} ({code}) — {node['label']}:")
-                    for s in sc:
-                        sc_lines.append(f"  • {s}")
-        sc_text = "\n".join(sc_lines) if sc_lines else "None defined"
-
-        if mode == "Draft new":
-            task_instruction = """YOUR TASK
-──────────────────────────────────
-Draft a complete assessment task with three sections:
-
-Section A — Core Width (Xmin) (~60% of marks)
-Compulsory items accessible to all students. Test minimum construction at key nodes.
-Focus: clarity, correctness, structured response.
-Typical items: identify, describe, explain, compare using scaffolded criteria.
-
-Section B — Extended Width (X+) (~30% of marks)
-Same concepts but requiring broader integration and coordination.
-Typical items: complete and explain, justify using reasoning, analyse a scenario.
-
-Section C — Synthetic Width (X++) (~10% of marks)
-Open-access. Students choose one option demonstrating transfer, application or synthesis.
-Typical items: evaluate a claim, explain a real-world application, defend a position.
-
-IMPORTANT:
-- No section introduces content beyond the Y-goals above
-- All students may attempt all sections
-- Do not label any section as "extension"
-- Assessment mean should naturally sit around 60% if well-calibrated"""
-        else:
-            task_instruction = f"""EXISTING TASK TO REVIEW
-──────────────────────────────────
-{existing_task}
-
-YOUR TASK
-──────────────────────────────────
-Evaluate the existing task above against the X–Y model requirements:
-
-1. Does it certify minimum width (Xmin) for all students? (~60% of marks)
-2. Does it reward extended width (X+) without requiring new content? (~30% of marks)
-3. Does it provide open-access synthetic width (X++)? (~10% of marks)
-4. Are hinge concepts adequately assessed?
-5. Does any item exceed the Y-goals stated above?
-
-Then suggest specific improvements to align it with the three-section structure.
-Rewrite any items that do not meet the model's requirements."""
-
-        assessment_prompt = f"""You are helping a Head of Department design a Year 7 Science assessment aligned to the X–Y Constructivist Model.
-
-CONTEXT
-──────────────────────────────────
-Year Level: 7
-Subject: Science
-Assessment Type: {assessment_type}
-Standards: {', '.join(selected_codes)}
-
-Y-GOALS (fixed conceptual endpoints — do not exceed these)
-──────────────────────────────────
-{y_goal_text}
-
-PRIOR KNOWLEDGE PATHWAY (what students already know coming into this unit)
-──────────────────────────────────
-{prior_text}
-
-HINGE CONCEPTS (must be adequately assessed)
-──────────────────────────────────
-{hinge_text}
-
-SUCCESS CRITERIA PER NODE (Section A items must test these directly)
-──────────────────────────────────
-{sc_text}
-
-ASSESSMENT MODEL
-──────────────────────────────────
-This assessment uses the X–Y model where:
-- Y-axis = conceptual depth (fixed, same for all students)
-- X-axis = width of construction (differentiated horizontally)
-- Xmin = minimum construction certifying the standard (~60% of marks)
-- X+ = extended width, same concepts, broader integration (~30% of marks)
-- X++ = synthetic width, open-access transfer and application (~10% of marks)
-
-{task_instruction}"""
-
-        st.session_state["last_assessment_prompt"] = assessment_prompt
+        st.session_state["last_assessment_prompt"] = build_assessment_prompt(
+            selected_codes, assessment_type, existing_task, existing_summary
+        )
 
     if st.session_state.get("last_assessment_prompt"):
         st.code(st.session_state["last_assessment_prompt"], language=None)
         st.caption("Copy and paste into Claude.ai, ChatGPT, or Gemini.")
 
-    # ── Step 2: Paste full task ───────────────────────────────────────────────
+    # ── Step 2: Paste outputs ─────────────────────────────────────────────────
     st.divider()
-    st.subheader("Step 2 — Paste Full Task")
-    st.caption("Paste the full AI-generated task here. This enables summary generation in Step 3.")
+    st.subheader("Step 2 — Paste AI Outputs")
+    st.caption("Paste the full task and summary from the AI response.")
 
-    finalised_task = st.text_area(
-        "Full assessment task",
-        value=st.session_state.get("finalised_task", ""),
-        height=180,
-        placeholder="Paste the full AI-generated task here...",
-        label_visibility="collapsed"
-    )
-    st.session_state["finalised_task"] = finalised_task
+    col1, col2 = st.columns(2)
+    with col1:
+        finalised_task = st.text_area(
+            "Full assessment task",
+            value=st.session_state.get("finalised_task", ""),
+            height=180,
+            placeholder="Paste Output 1 — full task here..."
+        )
+        st.session_state["finalised_task"] = finalised_task
+    with col2:
+        assessment_summary = st.text_area(
+            "Assessment summary",
+            value=st.session_state.get("assessment_summary", ""),
+            height=180,
+            placeholder="Paste Output 2 — summary here..."
+        )
+        st.session_state["assessment_summary"] = assessment_summary
 
-    # ── Step 3: Generate and paste summary ───────────────────────────────────
-    st.divider()
-    st.subheader("Step 3 — Generate and Paste Assessment Summary")
-    st.caption("Generate a concise summary to inform lesson planning. Only the summary feeds into Screen 4.")
-
-    if finalised_task.strip():
-        if st.button("Generate Summary Prompt", use_container_width=True):
-            summary_prompt = f"""You are helping summarise an assessment task for Year 7 Science lesson planning purposes.
-
-ASSESSMENT TASK
-──────────────────────────────────
-{finalised_task}
-
-YOUR TASK
-──────────────────────────────────
-Generate a concise assessment summary (maximum 150 words) suitable for informing lesson planning. Include:
-- Assessment type and format
-- Key concepts assessed in Section A (Xmin), Section B (X+), and Section C (X++)
-- Which hinge concepts are directly tested
-- Overall mark weighting per section
-
-Do not reproduce the full task. The summary will be used as context in lesson planning prompts."""
-            st.session_state["last_summary_prompt"] = summary_prompt
-
-        if st.session_state.get("last_summary_prompt"):
-            st.code(st.session_state["last_summary_prompt"], language=None)
-            st.caption("Copy and paste into Claude.ai, ChatGPT, or Gemini.")
-    else:
-        st.info("Paste the full task in Step 2 first to enable summary generation.")
-
-    assessment_summary = st.text_area(
-        "Assessment summary (feeds into lesson planning prompts)",
-        value=st.session_state.get("assessment_summary", ""),
-        height=120,
-        placeholder="Paste the AI-generated summary here...",
-        label_visibility="collapsed"
-    )
-    st.session_state["assessment_summary"] = assessment_summary
-
+    # ── Confirm and export ────────────────────────────────────────────────────
     st.divider()
     task_confirmed = st.checkbox(
         "Assessment task and summary are finalised — ready for class planning",
-        disabled=not (finalised_task.strip() and st.session_state.get("assessment_summary", "").strip())
+        disabled=not (finalised_task.strip() and assessment_summary.strip())
     )
 
     if task_confirmed:
         st.divider()
         st.subheader("Download Unit Plan")
-        st.caption("Download the complete node map and assessment structure as a PDF. Teachers annotate their copy with friction level and prior knowledge.")
+        st.caption("Class-agnostic PDF — teachers annotate with their friction level.")
         pdf_buf = generate_pdf(
             selected_codes=selected_codes,
             num_lessons=st.session_state.num_lessons,
             assessment_type=assessment_type,
-            assessment_summary=st.session_state.get("assessment_summary", "")
+            assessment_summary=assessment_summary
         )
         st.download_button(
             label="⬇ Download Unit Plan PDF",
@@ -229,7 +214,6 @@ Do not reproduce the full task. The summary will be used as context in lesson pl
             type="primary",
             use_container_width=True
         )
-        st.caption("This plan is class-agnostic. Teachers circle the appropriate width level for their class.")
 
     st.divider()
     if st.button("Continue to Class Planning →", type="primary",
