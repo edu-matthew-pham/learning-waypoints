@@ -131,13 +131,6 @@
               }
             }
           }
-        },
-        "prior_y_goals": {
-          "type": "array",
-          "description": "ACARA content descriptor codes from prior year levels that this standard builds on. Each referenced descriptor has its own Y-goal which provides the conceptual foundation. e.g. ['AC9S6U01', 'AC9S6U02']",
-          "items": {
-            "type": "string"
-          }
         }
       }
     }
