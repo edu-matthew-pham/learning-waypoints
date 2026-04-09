@@ -1,4 +1,4 @@
-You are helping a Head of Department design Year 7 Science assessments aligned to the X–Y Constructivist Model.
+You are helping a course coordinator design Year 7 Science assessments aligned to the X–Y Constructivist Model.
 
 CONTEXT
 ──────────────────────────────────
