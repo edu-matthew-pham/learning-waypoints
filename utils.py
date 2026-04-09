@@ -76,6 +76,7 @@ SESSION_DEFAULTS = {
     "selected_codes": [],
     "num_lessons": 12,
     "assessment_type": "Test",
+    "assessments": [],
     "friction_label": "Typical",
     "mean_rfi": None,
     "assessment_mode": "Draft new",

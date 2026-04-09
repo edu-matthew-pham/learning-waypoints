@@ -3,7 +3,6 @@ from utils import standards_map, get_prior_chain, generate_pdf
 
 
 def build_context(selected_codes):
-    """Build shared context block for all prompts."""
     hinge_nodes, y_goals, sc_lines, prior_lines = [], [], [], []
     for code in selected_codes:
         if code not in standards_map:
@@ -32,70 +31,69 @@ def build_context(selected_codes):
     }
 
 
-def build_assessment_prompt(selected_codes, assessment_type, existing_task, existing_summary):
+def build_assessment_prompt(selected_codes, assessments, existing_tasks, existing_summary):
     ctx = build_context(selected_codes)
 
-    # Adapt instructions based on what exists
-    task_section = ""
-    if existing_task.strip():
-        task_section = f"""EXISTING TASK
-──────────────────────────────────
-{existing_task}
+    # Build assessment items section
+    items_lines = []
+    for a in assessments:
+        items_lines.append(f"- {a['label']}: {a['type']} · {a['timing']}")
+    items_text = "\n".join(items_lines)
 
-OUTPUT 1 — REVISED ASSESSMENT TASK
-Review and improve the existing task against the X–Y model:
-1. Does it certify Xmin for all students? (~60% of marks)
-2. Does it reward X+ without new content? (~30% of marks)
-3. Does it provide open-access X++? (~10% of marks)
-4. Are hinge concepts adequately assessed?
-5. Does any item exceed the Y-goals?
-Rewrite items that do not meet requirements."""
-    else:
-        task_section = """OUTPUT 1 — FULL ASSESSMENT TASK
-Draft a complete assessment task with three sections:
+    # Build task instructions per item
+    task_instructions = []
+    for a in assessments:
+        existing = existing_tasks.get(a["id"], "").strip()
+        if existing:
+            task_instructions.append(
+                f"OUTPUT {a['id']} — REVISED: {a['label']} ({a['type']}, {a['timing']})\n"
+                f"Existing task to review:\n{existing}\n"
+                f"Evaluate against X–Y requirements and rewrite items that do not meet them."
+            )
+        else:
+            timing_note = (
+                "This is a MID-UNIT assessment — cover nodes taught so far, not the full unit."
+                if a["timing"] == "Mid-unit"
+                else "This is an END-OF-UNIT assessment — cover all nodes in the unit."
+            )
+            task_instructions.append(
+                f"OUTPUT {a['id']} — DRAFT: {a['label']} ({a['type']}, {a['timing']})\n"
+                f"{timing_note}\n"
+                f"Draft a complete assessment task with:\n"
+                f"  Section A — Xmin (~60%): compulsory, tests minimum construction\n"
+                f"  Section B — X+ (~30%): same concepts, broader integration\n"
+                f"  Section C — X++ (~10%): open-access transfer and synthesis\n"
+                f"Do not exceed Y-goals. Do not label any section as 'extension'."
+            )
 
-Section A — Core Width (Xmin) (~60% of marks)
-Compulsory, accessible to all. Tests minimum construction at key nodes.
-
-Section B — Extended Width (X+) (~30% of marks)
-Same concepts, broader integration and coordination.
-
-Section C — Synthetic Width (X++) (~10% of marks)
-Open-access. Transfer, application or synthesis.
-
-- No section introduces content beyond the Y-goals
-- All students may attempt all sections
-- Do not label any section as "extension"
-- Assessment mean should naturally sit around 60%"""
-
-    summary_section = ""
+    summary_instruction = ""
     if existing_summary.strip():
-        summary_section = f"""EXISTING SUMMARY
-──────────────────────────────────
-{existing_summary}
-
-OUTPUT 2 — REVISED SUMMARY
-Review and improve the existing summary. It should be 150 words max and include:
-- Assessment type and format
-- Key concepts per section (A/B/C)
-- Which hinge concepts are tested
-- Mark weighting per section"""
+        summary_instruction = (
+            f"FINAL OUTPUT — REVISED SUMMARY\n"
+            f"Existing summary to review:\n{existing_summary}\n"
+            f"Revise to cover all assessment items above."
+        )
     else:
-        summary_section = """OUTPUT 2 — ASSESSMENT SUMMARY (150 words max)
-A concise summary for lesson planning. Include:
-- Assessment type and format
-- Key concepts per section (A/B/C)
-- Which hinge concepts are directly tested
-- Mark weighting per section"""
+        summary_instruction = (
+            "FINAL OUTPUT — COMBINED SUMMARY (150 words max)\n"
+            "Summarise all assessment items for lesson planning. Include:\n"
+            "- Each item's type, timing and format\n"
+            "- Key concepts per section (A/B/C) for each item\n"
+            "- Which hinge concepts are tested and in which item\n"
+            "- Mark weighting per section"
+        )
 
-    return f"""You are helping a Head of Department design a Year 7 Science assessment aligned to the X–Y Constructivist Model.
+    return f"""You are helping a Head of Department design Year 7 Science assessments aligned to the X–Y Constructivist Model.
 
 CONTEXT
 ──────────────────────────────────
 Year Level: 7
 Subject: Science
-Assessment Type: {assessment_type}
 Standards: {', '.join(selected_codes)}
+
+ASSESSMENT ITEMS
+──────────────────────────────────
+{items_text}
 
 Y-GOALS (do not exceed these)
 ──────────────────────────────────
@@ -105,11 +103,11 @@ PRIOR KNOWLEDGE PATHWAY
 ──────────────────────────────────
 {ctx['prior_text']}
 
-HINGE CONCEPTS (must be adequately assessed)
+HINGE CONCEPTS (must be adequately assessed across items)
 ──────────────────────────────────
 {ctx['hinge_text']}
 
-SUCCESS CRITERIA PER NODE (Section A must test these)
+SUCCESS CRITERIA PER NODE (Section A items must test these)
 ──────────────────────────────────
 {ctx['sc_text']}
 
@@ -119,47 +117,55 @@ ASSESSMENT MODEL
 - X+ = extended width, same concepts (~30%)
 - X++ = synthetic width, open-access transfer (~10%)
 
-{task_section}
+YOUR TASK
+──────────────────────────────────
+Provide one output per assessment item, then a combined summary.
 
-{summary_section}"""
+{chr(10).join(task_instructions)}
+
+{summary_instruction}"""
 
 
 def show():
     selected_codes = st.session_state.selected_codes
-    assessment_type = st.session_state.assessment_type
+    assessments = st.session_state.get("assessments", [])
 
     if st.button("← Back"):
         st.session_state.page = "s2_nodes"
         st.rerun()
 
     st.subheader("Assessment Setup")
-    st.caption(f"Assessment type: **{assessment_type}** · Standards: {', '.join(selected_codes)}")
+    st.caption(f"Standards: {', '.join(selected_codes)} · {len(assessments)} assessment item(s)")
 
-    # ── Step 1: Optional existing inputs + generate ───────────────────────────
+    # ── Step 1: Generate combined prompt ─────────────────────────────────────
     st.subheader("Step 1 — Generate Assessment Prompt")
-    st.caption("Optionally paste existing task and/or summary — the prompt will review and improve them. Leave blank to draft from scratch.")
+    st.caption("Optionally paste existing tasks/summary — the prompt will review them. Leave blank to draft from scratch.")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        existing_task = st.text_area(
-            "Existing task (optional)",
-            value=st.session_state.get("existing_task", ""),
-            height=140,
-            placeholder="Paste existing task to review, or leave blank to draft new..."
-        )
-        st.session_state["existing_task"] = existing_task
-    with col2:
-        existing_summary = st.text_area(
-            "Existing summary (optional)",
-            value=st.session_state.get("existing_summary", ""),
-            height=140,
-            placeholder="Paste existing summary to review, or leave blank to generate new..."
-        )
-        st.session_state["existing_summary"] = existing_summary
+    # Optional existing inputs per assessment item
+    existing_tasks = {}
+    with st.expander("Paste existing tasks (optional)"):
+        for a in assessments:
+            val = st.text_area(
+                f"{a['label']} ({a['type']}, {a['timing']})",
+                value=st.session_state.get(f"existing_task_{a['id']}", ""),
+                height=120,
+                placeholder=f"Paste existing {a['label']} task to review, or leave blank...",
+                key=f"existing_task_input_{a['id']}"
+            )
+            st.session_state[f"existing_task_{a['id']}"] = val
+            existing_tasks[a["id"]] = val
+
+    existing_summary = st.text_area(
+        "Existing summary (optional)",
+        value=st.session_state.get("existing_summary", ""),
+        height=80,
+        placeholder="Paste existing summary to review, or leave blank..."
+    )
+    st.session_state["existing_summary"] = existing_summary
 
     if st.button("Generate Assessment Prompt", type="primary", use_container_width=True):
         st.session_state["last_assessment_prompt"] = build_assessment_prompt(
-            selected_codes, assessment_type, existing_task, existing_summary
+            selected_codes, assessments, existing_tasks, existing_summary
         )
 
     if st.session_state.get("last_assessment_prompt"):
@@ -169,37 +175,41 @@ def show():
     # ── Step 2: Paste outputs ─────────────────────────────────────────────────
     st.divider()
     st.subheader("Step 2 — Paste AI Outputs")
-    st.caption("Paste the full task and summary from the AI response.")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        finalised_task = st.text_area(
-            "Full assessment task",
-            value=st.session_state.get("finalised_task", ""),
-            height=180,
-            placeholder="Paste Output 1 — full task here..."
+    for a in assessments:
+        task_val = st.text_area(
+            f"Output {a['id']}: {a['label']} ({a['type']}, {a['timing']})",
+            value=st.session_state.get(f"finalised_task_{a['id']}", ""),
+            height=160,
+            placeholder=f"Paste Output {a['id']} — {a['label']} task here...",
+            key=f"finalised_task_input_{a['id']}"
         )
-        st.session_state["finalised_task"] = finalised_task
-    with col2:
-        assessment_summary = st.text_area(
-            "Assessment summary",
-            value=st.session_state.get("assessment_summary", ""),
-            height=180,
-            placeholder="Paste Output 2 — summary here..."
-        )
-        st.session_state["assessment_summary"] = assessment_summary
+        st.session_state[f"finalised_task_{a['id']}"] = task_val
+
+    assessment_summary = st.text_area(
+        "Combined assessment summary",
+        value=st.session_state.get("assessment_summary", ""),
+        height=100,
+        placeholder="Paste the combined summary here...",
+    )
+    st.session_state["assessment_summary"] = assessment_summary
 
     # ── Confirm and export ────────────────────────────────────────────────────
     st.divider()
+    all_tasks_filled = all(
+        st.session_state.get(f"finalised_task_{a['id']}", "").strip()
+        for a in assessments
+    )
     task_confirmed = st.checkbox(
-        "Assessment task and summary are finalised — ready for class planning",
-        disabled=not (finalised_task.strip() and assessment_summary.strip())
+        "All assessment tasks and summary are finalised — ready for class planning",
+        disabled=not (all_tasks_filled and assessment_summary.strip())
     )
 
     if task_confirmed:
         st.divider()
         st.subheader("Download Unit Plan")
         st.caption("Class-agnostic PDF — teachers annotate with their friction level.")
+        assessment_type = assessments[0]["type"] if assessments else "Test"
         pdf_buf = generate_pdf(
             selected_codes=selected_codes,
             num_lessons=st.session_state.num_lessons,
